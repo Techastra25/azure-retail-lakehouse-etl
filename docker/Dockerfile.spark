@@ -1,0 +1,11 @@
+FROM bitnami/spark:3.5
+
+USER root
+WORKDIR /workspace
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Delta Lake JARs for local Spark to read/write Delta format
+ENV DELTA_VERSION=3.1.0
+RUN spark-shell --packages io.delta:delta-spark_2.12:${DELTA_VERSION} -e "" || true
