@@ -1,0 +1,82 @@
+{
+  "name": "retail_lakehouse_pipeline",
+  "properties": {
+    "description": "Orchestrates daily Bronze -> Silver -> Gold refresh for the retail lakehouse using Databricks Notebook Activities triggered after raw files land in ADLS Gen2.",
+    "activities": [
+      {
+        "name": "Copy_RawFiles_ADLS",
+        "type": "Copy",
+        "description": "Pulls daily POS/transaction files from source (on-prem SFTP / REST API) into ADLS Gen2 raw/ zone.",
+        "typeProperties": {
+          "source": { "type": "RestSource" },
+          "sink": {
+            "type": "DelimitedTextSink",
+            "storeSettings": { "type": "AzureBlobFSWriteSettings" }
+          }
+        },
+        "outputs": [{ "referenceName": "ds_raw_adls", "type": "DatasetReference" }]
+      },
+      {
+        "name": "Bronze_Ingest_Notebook",
+        "type": "DatabricksNotebook",
+        "dependsOn": [{ "activity": "Copy_RawFiles_ADLS", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "notebookPath": "/Repos/retail-lakehouse/bronze_ingest",
+          "baseParameters": {
+            "run_date": "@formatDateTime(utcnow(),'yyyy-MM-dd')"
+          }
+        },
+        "linkedServiceName": { "referenceName": "ls_databricks", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "Silver_Transform_Notebook",
+        "type": "DatabricksNotebook",
+        "dependsOn": [{ "activity": "Bronze_Ingest_Notebook", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "notebookPath": "/Repos/retail-lakehouse/silver_transform",
+          "baseParameters": {
+            "run_date": "@formatDateTime(utcnow(),'yyyy-MM-dd')"
+          }
+        },
+        "linkedServiceName": { "referenceName": "ls_databricks", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "Gold_Aggregate_Notebook",
+        "type": "DatabricksNotebook",
+        "dependsOn": [{ "activity": "Silver_Transform_Notebook", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "notebookPath": "/Repos/retail-lakehouse/gold_aggregate",
+          "baseParameters": {
+            "run_date": "@formatDateTime(utcnow(),'yyyy-MM-dd')"
+          }
+        },
+        "linkedServiceName": { "referenceName": "ls_databricks", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "Quality_Check_RowCount",
+        "type": "Lookup",
+        "description": "Validates gold table row counts are non-zero before declaring pipeline success; fails fast for downstream BI consumers.",
+        "dependsOn": [{ "activity": "Gold_Aggregate_Notebook", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT COUNT(*) AS row_count FROM gold.daily_store_sales WHERE transaction_date = CAST(GETDATE() AS DATE) - 1"
+          }
+        }
+      },
+      {
+        "name": "Notify_OnFailure",
+        "type": "WebActivity",
+        "dependsOn": [{ "activity": "Quality_Check_RowCount", "dependencyConditions": ["Failed"] }],
+        "typeProperties": {
+          "method": "POST",
+          "url": "@pipeline().parameters.alertWebhookUrl",
+          "body": "Pipeline retail_lakehouse_pipeline failed quality check on @{utcnow()}"
+        }
+      }
+    ],
+    "parameters": {
+      "alertWebhookUrl": { "type": "string" }
+    }
+  }
+}
