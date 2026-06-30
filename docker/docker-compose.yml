@@ -1,0 +1,38 @@
+version: "3.8"
+
+# Fully local dev/test environment that mirrors the Azure architecture:
+#   Spark (local mode)   -> stands in for Azure Databricks
+#   Delta Lake on disk   -> stands in for ADLS Gen2 + Delta tables
+#   Postgres             -> stands in for Azure SQL Database serving layer
+#
+# Run: docker compose up -d
+# Then: docker exec -it retail-spark bash -c "spark-submit src/run_pipeline.py"
+
+services:
+  spark:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.spark
+    container_name: retail-spark
+    volumes:
+      - ./:/workspace
+    working_dir: /workspace
+    environment:
+      - PYSPARK_PYTHON=python3
+    tty: true
+
+  postgres:
+    image: postgres:15
+    container_name: retail-postgres
+    environment:
+      POSTGRES_DB: retail_gold
+      POSTGRES_USER: retail_admin
+      POSTGRES_PASSWORD: localdevpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./sql/create_gold_tables.sql:/docker-entrypoint-initdb.d/init.sql
+
+volumes:
+  pg_data:
